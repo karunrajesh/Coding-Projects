@@ -1,0 +1,334 @@
+---
+title: "MBQCFile"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## MBQC Data:
+
+#### Project Goals:
+* Lot of variation in microbiome data that leads to a lack of reproducibility of experiments
+* Standardize technology and methods for analyzing human microbial data
+
+#### Project Details:
+* Wanted to analyze the variation between methods and testing locations
+* 2 Main Parts Looked At
+    + Experimental Sample Handling
+    + Bioinformatics Data Processing
+
+#### Data Statistics: 
+* 23 specimen of 5 types:
+    +	Fresh stool (11)
+    +	Freeze dried stool (7)
+    +	Robogut/Chemo-stat stool derived communities (2)
+    +	positive gut- and oral-derived artificial communities
+    +	Negative Reagent (Tris buffer) (3)
+* 96 Aliquots (small sample) of 23 specimen
+* Randomly Sequenced at 15 Laboratories
+    + Data was shuffled
+* Distributed to 9 facilities for 9 different microbiome analyses protocols
+    + Data generation protocols were not prescribed
+
+    
+```{r, echo=FALSE, fig.cap="A caption", out.width = '100%'}
+knitr::include_graphics(file.path(getwd(), "design.jpeg"))
+```
+
+
+```{r cars, include=FALSE}
+set.seed(12341)
+rm(list=ls())
+
+#packages for salter data
+library(data.table)
+library(decontam)
+library(phyloseq)
+library(reshape2)#;packageVersion("reshape2")
+library(xtable)
+library(knitr)
+library(kableExtra)
+library(DT)
+library(Matrix)
+library(devtools)
+require(ggplot2)
+require(sn)
+require(fitdistrplus)
+require(psych) 
+library(PERFect)
+library(dirmult)
+library(HMP)
+library(knitr)
+library(png)
+library(gridExtra)
+library(grid)
+library(reshape2)
+library(zoo)
+
+setwd("~/Dropbox/MicrobiomeFiltering/Code/Karun")
+#setwd("~/Documents/Katia Lab/MockCommunity/Data")
+
+path.ampli <- "~/Documents/Katia Lab/MockCommunity/Data"
+#path.ampli <- "~/Dropbox/MBWG/MockCommunity/Data/"
+
+```
+
+## Reading in Data
+
+* Taking in 27211 taxa and 16140 samples from MBQC file
+    + Create list of all classifications of taxa by parsing row names
+    + Create taxa table with these classifications
+    + Take tsv file convert it to data frame and then convert to matrix for phyloseq function
+* Have statistics of all 16140 samples
+    + Can subset data based on these stastics
+    + Includes factors like age, BMI, sample type, processing lab, etc.
+* RDS File Creation
+    + Create file, MBQC_phyloseq.RDS, out of created phyloseq object
+    + RDS file is easier to work with than excel file
+    + Allows for manipulation of phyloseq object without creating it from scratch
+
+```{r readTsv, echo= FALSE}
+#df.ampli <- read.tsv(file.path(path.ampli, "mbqc_integrated_otus.tsv"), header=TRUE, stringsAsFactors = FALSE)
+options(xtable.floating = FALSE)
+options(xtable.timestamp = "")
+# Read in OTU table
+tf.ampli <- read.table(file =  file.path(path.ampli, 'mbqc_integrated_otus.tsv'), sep = '\t', header = TRUE)
+# Get the names of all samples
+name.ampli <- tf.ampli[0,]
+# Get the metadata of the samples, make first row the column names
+stat.ampli <- t(tf.ampli[0:71,])
+colnames(stat.ampli) = stat.ampli[1,]
+stat.ampli = stat.ampli[-1,]
+# Get the length of the full OTU table
+a = dim(tf.ampli)[1]
+# Number of taxa in OTU table
+check = (a-72)+1
+# Get all taxa in sample
+taxa.ampli <- tf.ampli[72:a,]
+#Dataframe with taxa and sample names
+new.ampli <- rbind(name.ampli,taxa.ampli)
+rownames(new.ampli) <- new.ampli$sample
+new.ampli$sample <- NULL
+#stat.ampli$sample <- NULL
+otumat <- data.matrix(new.ampli)
+```
+
+
+
+
+```{r PhySeq, echo = FALSE}
+## Creation of classification table for taxa
+oh <- array(1:check)
+king <- array(1:check)
+phyl <- array(1:check)
+cls <- array(1:check)
+ord <- array(1:check)
+fam <- array(1:check)
+gen <- array(1:check)
+for (i in 1:check){ 
+  oh[i] <- toString(taxa.ampli$sample[i])
+  b <- unlist(strsplit(oh[i],"__"))
+  king[i] <- substr(b[2],1,nchar(b[2])-2)
+  phyl[i] <- substr(b[3],1,nchar(b[3])-2)
+  cls[i] <- substr(b[4],1,nchar(b[4])-2)
+  ord[i] <- substr(b[5],1,nchar(b[5])-2)
+  fam[i] <- substr(b[6],1,nchar(b[6])-2)
+  gen[i] <- substr(b[7],1,nchar(b[7])-2)
+}
+#Table of taxa with classification
+taxmat = matrix(c(king,phyl,cls,ord,fam,gen), nrow = check, ncol = 6)
+rownames(taxmat) <- rownames(new.ampli)
+colnames(taxmat) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus")
+#OTU Table
+OTU = otu_table(otumat, taxa_are_rows = TRUE)
+#TAXA Table
+TAX = tax_table(taxmat)
+#Sample Metadata
+SAMPLE = sample_data(data.frame(stat.ampli))
+#Phyloseq Object
+physeq = phyloseq(OTU, TAX, SAMPLE)
+```
+
+### Sample Statistics
+* Looked at:
+    + Bioinformatics Lab
+    + Gender
+    + Health
+    + Processing Lab
+    + Sample Type
+* Number of samples and proportion of row statistic
+
+```{r Subset}
+##### SAMPLE #####
+robo <- which(tf.ampli[56,] == 'Robogut')
+robo.ampli <- tf.ampli[72:110, robo]
+robogut <- length(robo)
+fecart <- which(tf.ampli[56,] == 'Fecal artificial colony')
+fecart.ampli <- tf.ampli[72:110, fecart]
+fecalArtificial <- length(fecart)
+frsh <- which(tf.ampli[56,] == 'Fresh')
+fresh.ampli <- tf.ampli[72:110, frsh]
+fresh <- length(frsh)
+frz <- which(tf.ampli[56,] == 'Freeze-dried')
+frz.ampli <- tf.ampli[72:110, frz]
+freezeDried <- length(frz)
+oral <- which(tf.ampli[56,] == 'Oral artificial colony')
+oral.ampli <- tf.ampli[72:110, oral]
+OralArt <- length(oral)
+
+samp <- t(data.frame(tf.ampli[56,2:length(tf.ampli[56,])]))
+sampT <- table(samp)
+sampPro <- round(sampT/sum(sampT),2)
+##################
+
+##### GENDER #####
+gend <- t(data.frame(tf.ampli[51,2:length(tf.ampli[51,])]))
+gendT <- table(gend)
+gendPro <- round(gendT/sum(gendT),2)
+##################
+
+##### PROCESSING LAB #####
+lab <- t(data.frame(tf.ampli[24,2:length(tf.ampli[24,])]))
+labT <- table(lab)
+labPro <- round(labT/sum(labT),2)
+###########################
+
+##### HEALTH #####
+health <- t(data.frame(tf.ampli[27,2:length(tf.ampli[27,])]))
+healthT <- table(health)
+healthPro <- round(healthT/sum(healthT),2)
+##################
+
+##### BNFO LAB #####
+bnfo <- t(data.frame(tf.ampli[21,2:length(tf.ampli[21,])]))
+bnfoT <- table(bnfo)
+bnfoPro <- round(bnfoT/sum(bnfoT),2)
+####################
+```
+
+
+### Summary Statistics Table
+* Generated from sample statistics
+* Includes number of samples and proportion of sample statistic
+* Interpreting Numbers:
+    + There were not 13,746 people as indicated by the gender section
+    + Numbers are representative of the aliquots of the initial sample
+    + Each sample is a small portion of a larger sample
+
+```{r Tables}
+#Get rownames of each factor
+names = c(rownames(sampT),rownames(gendT), rownames(labT),rownames(healthT), rownames(bnfoT))
+hello <- matrix(c(sampT,gendT,labT,healthT,bnfoT,sampPro,gendPro,labPro,healthPro, bnfoPro), ncol=2)
+colnames(hello) <- c("Number of Samples","Proportion")
+rownames(hello) <- names
+kable(hello) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))%>%
+  group_rows("Sample Type", 1, 6) %>%
+  group_rows("Gender", 7, 9) %>%
+  group_rows("Processing Lab", 10, 23) %>%
+  group_rows("Condition", 24, 25) %>%
+  group_rows("Bioinformatics Lab", 26, 33)
+#################
+
+#####Two-Way Tables#####
+twoLab <- table(bnfo,lab)
+twoSL <- table(samp,lab)
+twoSB <- table(samp, bnfo)
+```
+
+### Sample Type Pie Graph
+* Fresh and Freeze-Dried samples predominate the overall distribution
+* Not many artificially derived samples
+* Could lead to more variability with smaller sample size
+
+```{r Pie, echo= FALSE}
+x <- c(robogut,fecalArtificial,fresh,freezeDried,OralArt)
+labels <- c("Robotgut","Fecal Artificial", "Fresh", "Freeze Dried", "Oral Artificial")
+png(file = file.path(getwd(), "mbqc.jpg"))
+pie(x,labels)
+```
+
+```{r image, echo=FALSE, fig.cap="Sample Type Distribution", out.width = '100%'}
+knitr::include_graphics(file.path(getwd(), "mbqc.jpg"))
+```
+
+### Processing Lab and Bioinformatics Lab
+* Table
+    + Displays the number of samples of each bioinformatics lab with each processing lab
+* Initial Observations
+    + As can be seen, the number of samples if fairly consistent per each column 
+    + Few distinct exceptions
+    + HL-D has almost half its entries as zeros
+    + HL-A has some entries that are half the other entries (70, 35)
+    
+```{r twoLab}
+kable(twoLab) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  column_spec(1, bold = T, border_right = T)
+```
+
+### Sample Type and Processing Lab
+* Table
+    + Displays the number of samples of each sample type with each processing lab
+* Initial Observations
+    + Numbers are fairly spread out between each entry
+    + Common proportions between sample type for each column
+    + HL-J appears to process more samples than any other processing lab
+
+```{r twoSL}
+kable(twoSL) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  column_spec(1, bold = T, border_right = T)
+```
+
+### Sample Type and Bioinformatics Lab
+* Table
+    + Displays the number of samples of each sample type with each bioinformatics lab
+* Initial Observations
+    + Numbers are around equal for each column
+    + Common proportions between sample type for each column
+
+```{r twoSB}
+kable(twoSB) %>%
+  kable_styling(bootstrap_options = c("striped", "hover")) %>%
+  column_spec(1, bold = T, border_right = T)
+########################
+```
+### Alpha Diversity
+* Sample Handling
+    + HL-E, HL-I, and HL-K show a widespread between its' samples
+    + This could point to contamination within the samples leading to this variance
+* Bioinformatics Handling
+    + Roughly same distribution across different labs
+    + BL-3 has notably little to no variance
+```{r alphadiv}
+#Read in phyloseq file for oral artificial community
+oralseq <- readRDS("Oral_Physeq.rds")
+#Take out all OTUs with reads < 1
+GP <- prune_species(speciesSums(oralseq) > 0, oralseq)
+#Plot Shannon and Simpson Diversity index
+richness_measures <-c("Shannon", "Simpson")
+plot_richness(GP, x="blinded_lab", measures=richness_measures)
+plot_richness(GP, x="dry_lab", measures=richness_measures)
+```
+### Heatmap
+```{r heat}
+
+img1 <-  rasterGrob(as.raster(readPNG("mockheatmap_top200taxa_600sam.png")), interpolate = FALSE)
+img2 <-  rasterGrob(as.raster(readPNG("mockheatmap_top100taxa_600sam.png")), interpolate = FALSE)
+grid.arrange(img1, img2, ncol = 2)
+```
+### Full MDS 
+```{r full}
+img3 <-  rasterGrob(as.raster(readPNG("mds_hl_full.png")), interpolate = FALSE)
+img4 <-  rasterGrob(as.raster(readPNG("mds_bl_full.png")), interpolate = FALSE)
+grid.arrange(img3, img4, ncol = 2)
+```
+### Lab MDS
+```{r hlbl}
+img5 <-  rasterGrob(as.raster(readPNG("mds_hl.png")), interpolate = FALSE)
+img6 <-  rasterGrob(as.raster(readPNG("mds_bl.png")), interpolate = FALSE)
+grid.arrange(img5, img6, ncol = 2)
+```

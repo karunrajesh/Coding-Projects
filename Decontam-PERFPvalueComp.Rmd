@@ -1,0 +1,333 @@
+---
+title: "Dec_PERFPValueComp"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+rm(list=ls())
+#packages for salter data
+library(decontam)
+library(phyloseq)
+library(reshape2)#;packageVersion("reshape2")
+library(DT)
+library(Matrix)
+library(devtools)
+require(ggplot2)
+require(sn)
+require(fitdistrplus)
+require(psych) 
+library(PERFect)
+library(dirmult)
+library(HMP)
+library(knitr)
+library(gridExtra)
+library(grid)
+library(reshape2)
+library(zoo)
+
+
+set.seed(12341)
+#setwd("~/Dropbox/PERFect/RCode/")
+setwd("~/Documents/Katia Lab/PERFect-master/R")
+```
+
+
+Read in the sample metadata
+
+```{r read_in_data}
+path.ampli <- "~/Documents/Katia Lab/DecontamManuscript-master/Analyses/Salter16S" # CHANGE ME
+df.ampli <- read.csv(file.path(path.ampli, "Salter1.csv"), header=TRUE, stringsAsFactors = FALSE)
+rownames(df.ampli) <- df.ampli$Run.accession
+```
+
+Read in the DADA2-processed ASV tables and taxonomnic assignments:
+
+```{r read_in_rds}
+st.ampli <- readRDS(file.path(path.ampli, "st.rds"))
+tax.ampli <- readRDS(file.path(path.ampli, "tax.rds"))
+ft.ampli <- sweep(st.ampli, 1, rowSums(st.ampli), "/")
+df.ampli$Dilution.number[df.ampli$Dilution.number == "0 (original culture)"] <- "0"
+df.ampli$Dilution.number[df.ampli$Dilution.number == "Negative control"] <- "Neg"
+conc.dict <- c("0"=1e3, "0 (original culture)"=1e3, "1"=1e2, "2"=1e1, "3"=1, "4"=1, "5"=1, "Neg"=1)
+df.ampli$conc <- conc.dict[df.ampli$Dilution.number]
+#identical(rownames(df.ampli), rownames(st.ampli)) # TRUE
+ps.ampli <- phyloseq(otu_table(st.ampli, taxa_are_rows=FALSE), tax_table(tax.ampli), sample_data(df.ampli))
+```
+
+## Analysis of 16S Amplicon Data
+```{r}
+#all non-Salmonealla reads in each sample are contaminants
+#these are the First 3  real SVs from the S. bongori strain
+true <- "Salmonella" == unname(tax.ampli)[,6]
+#make a vector of taxa cont and  id's
+type <-  rep("contam", dim(tax.ampli)[1])
+type[1:3] <- "true"
+
+taxaInfo <- data.frame(unname(tax.ampli))
+taxa <- rownames(taxaInfo)
+#change to numeric id  
+names(taxaInfo) <- c("kindgdom", "phylum", "class", "order",
+                     "family", "genus")
+taxaInfo <- cbind(taxa, type, taxaInfo)
+
+#arrange taxa in prevalence order NP
+#head is least dominant, tail is most dominant
+Salter.counts <- data.frame(otu_table(ps.ampli))
+names(Salter.counts) <- taxa
+NP <- NP_Order(Salter.counts)
+#taxaInfo <- taxaInfo[match(NP, taxaInfo$taxa),]
+#taxaInfo$taxa <- factor(taxaInfo$taxa, levels = NP)
+#all 3 true features are the most dominant in the data
+
+#dim(Salter.counts)
+Counts <- Salter.counts
+```
+
+
+
+```{r}
+#function to output results for each simulation run
+resSummary <-function(X, filtX, taxaInfo,  time = NA){
+  rank_pvals = NULL 
+  rank_pres = NULL
+  ntotal <- dim(X)[2]
+  npres <- dim(filtX)[2] #number of taxa left
+  pfilt <- (ntotal - npres)/ntotal #percentage of taxa filtered
+  ntrue <- sum(colnames(filtX) %in% c(1:3))#compare with true taxa
+  ncont <- length(taxaInfo$taxa) - 3
+  perccont <- (npres - ntrue)/ncont
+  #combine into results vector
+  res <- c(ntotal, npres, pfilt, ntrue, perccont)
+  names(res) <- c("ntotal", "npres", "pfilt", "ntrue", "perccont")
+  return(list(res = res,  time = time))
+}
+```
+
+
+1. Simultaneous PERFect with skew-normal distribution and taxa abundance ordering (NP ordering
+```{r create_simNP}
+
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_sim_sn_a <- PERFect_sim(X=Counts)
+end <-  Sys.time()-start
+
+```
+2. Simultaneous PERFect with skew-normal distribution and p-values ordering
+```{r create_simPvals}
+
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_sim_sn_a_pvals <- PERFect_sim(X=Counts,Order = "pvals",  
+                                  pvals_sim = res_sim_sn_a)
+end <-  Sys.time()-start
+```
+
+
+3. Permutation PERFect with skew-normal distribution and NP ordering
+```{r create_permNP}
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_perm_a <- PERFect_perm(X=Counts)
+(end <-  Sys.time()-start)
+```
+
+4. Permutation PERFect with skew-normal distribution and simultaneous PERFect p-values ordering
+```{r create_permPvals}
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_perm_pvals_a <- PERFect_perm_reorder(X=Counts,  Order = "pvals",  
+                                         pvals_sim = res_sim_sn_a, 
+                                         res_perm = res_perm_a)
+end <-  Sys.time()-start
+```
+
+
+5. Filtering method from the *decontam* R-package
+```{r create_decontam_data}
+#Filtering method from the *decontam* R-package
+start <- Sys.time()
+ampli.min <- isContaminant(ps.ampli, method="frequency", conc="conc", batch="Processing.Institute", batch.combine="minimum", normalize=TRUE)
+end <-  Sys.time()-start
+ampli.pool <- isContaminant(ps.ampli, method="frequency", conc="conc", normalize=TRUE)
+```
+
+
+6. Create vector of contaminants through both decontam methods
+```{r create_decontam_contaminants}
+decPool = which(ampli.pool$p<=0.1)
+decMin = which(ampli.min$p<=0.1)
+ID = decPool
+Genus = unname(tax.ampli)[,6][decPool]
+decontamPvals = round(ampli.pool$p[decPool],5)
+```
+
+## Create table showing both decontam and PERFect p-values side by side for contaminants by decontam method
+
+```{r TableCreation}
+
+simOnePvals = round(res_sim_sn_a$pvals[as.character(decPool)],5)
+dfOne = data.frame(ID,decontamPvals,simOnePvals, Genus)
+datatable(dfOne, rownames = FALSE)
+## Determine P-values that are close to being significant for PERFect method
+idOne = which((simOnePvals>=0.08)&(simOnePvals<=0.15))
+simNewPvals = simOnePvals[idOne]
+newGenus = Genus[idOne]
+newdecontamPvals = decontamPvals[idOne]
+dfNew = data.frame(idOne,newdecontamPvals,simNewPvals,newGenus)
+datatable(dfNew, rownames = FALSE)
+#formatStyle(columns = "simAPvals", background = styleEqual(c(>0.1), c("magenta")))
+# Create table showing both decontam and PERFect p-values side by side for contaminants
+# by decontam method
+simTwoPvals = round(res_sim_sn_a_pvals$pvals[as.character(decPool)],5)
+dfTwo = data.frame(ID,decontamPvals,simTwoPvals, Genus)
+datatable(dfTwo, rownames = FALSE)
+## Determine P-values that are close to being significant for PERFect method
+idTwo = which((simTwoPvals>=0.08)&(simTwoPvals<=0.15))
+simNewTwoPvals = simTwoPvals[idTwo]
+newGenusTwo = Genus[idTwo]
+newdecontamPvalsTwo = decontamPvals[idTwo]
+dfNewTwo = data.frame(idTwo,newdecontamPvalsTwo,simNewTwoPvals,newGenusTwo)
+datatable(dfNewTwo, rownames = FALSE)
+# Create table showing both decontam and PERFect p-values side by side for contaminants
+# by decontam method
+permThreePvals = round(res_perm_a$pvals[as.character(decPool)],7)
+dfThree = data.frame(ID,decontamPvals,permThreePvals, Genus)
+datatable(dfThree, rownames = FALSE)
+## Determine P-values that are close to being significant for PERFect method
+idThree = which((permThreePvals>=0.08)&(permThreePvals<=0.15))
+permNewThreePvals = permThreePvals[idThree]
+newGenusThree = Genus[idThree]
+newdecontamPvalsThree = decontamPvals[idThree]
+dfNewThree = data.frame(idThree,newdecontamPvalsThree,permNewThreePvals,newGenusThree)
+datatable(dfNewThree, rownames = FALSE)
+# Create table showing both decontam and PERFect p-values side by side for contaminants
+# by decontam method
+permFourPvals = round(res_perm_pvals_a$pvals[as.character(decPool)],7)
+dfFour = data.frame(ID,decontamPvals,permFourPvals, Genus)
+datatable(dfFour, rownames = FALSE)
+## Determine P-values that are close to being significant for PERFect method
+idFour = which((permFourPvals>=0.08)&(permFourPvals<=0.15))
+permNewFourPvals = permFourPvals[idFour]
+newGenusFour = Genus[idFour]
+newdecontamPvalsFour = decontamPvals[idFour]
+dfNewFour = data.frame(idFour,newdecontamPvalsFour,permFourPvals,newGenusFour)
+datatable(dfNewFour, rownames = FALSE)
+
+df = data.frame(ID,decontamPvals,simOnePvals,simTwoPvals,permThreePvals,permFourPvals)
+datatable(df,rownames=FALSE)
+
+```
+
+
+2. Simultaneous PERFect with skew-normal distribution and p-values ordering
+```{r AllTaxa}
+id_all=c(1:635)
+decont=round(ampli.pool$p[id_all],5)
+#d = round(1-decont,5)
+simCNP=as.vector(res_sim_sn_a$pvals[as.character(id_all)])
+simCpVals=as.vector(res_sim_sn_a_pvals$pvals[as.character(id_all)])
+permCNP=as.vector(res_perm_a$pvals[as.character(id_all)])
+permCpVals=as.vector(res_perm_pvals_a$pvals[as.character(id_all)])
+df_all = cbind(id_all,decont,simCNP,simCpVals,permCNP,permCpVals)
+df_all=df_all[-42,]
+df_all=data.frame(df_all)
+
+simX2 = length(which((decont<0.1)&(simCNP>0.1)))
+simX1 = length(which((decont>0.1)&(simCNP>0.1)))
+simX4 = length(which((decont>0.1)&(simCNP<0.1)))
+simX3 = length(which((decont<0.1)&(simCNP<0.1)))
+
+permX2 = length(which((decont<0.1)&(permCNP>0.1)))
+permX1 = length(which((decont>0.1)&(permCNP>0.1)))
+permX4 = length(which((decont>0.1)&(permCNP<0.1)))
+permX3 = length(which((decont<0.1)&(permCNP<0.1)))
+
+```
+
+
+
+
+## Plot of decontam vs PERFect Simultaneous method
+
+You can also embed plots, for example:
+
+```{r SimPlot, echo=FALSE}
+p_pvals <- ggplot(df_all) + geom_point(aes(x = decont, y = simCNP)) + ggtitle("Permutation PERFect p-values") + 
+  theme(panel.background = element_rect(fill = "white"), 
+        panel.grid.major = element_line(colour = "grey90"), 
+        axis.text.x = element_text(size = 10, colour = "black", 
+                                   angle = 90, hjust = 1))
+p_pvals <- p_pvals + geom_hline(yintercept = 0.1, color = "red", 
+                                linetype = "dashed")
+p_pvals <- p_pvals + ggtitle("") + geom_vline(xintercept = 0.1, 
+                                              color = "purple", linetype = "dashed")
+p_pvals<-p_pvals+geom_rect(aes(xmin = 0.1, xmax = 1, ymin = 0, ymax = 0.1),
+                           fill = "green", alpha = 0.005)
+p_pvals<-p_pvals+geom_rect(aes(xmin = 0, xmax = 0.1, ymin = 0.1, ymax = 1),
+                           fill = "green", alpha = 0.005)
+p_pvals<-p_pvals+geom_rect(aes(xmin = 0.1, xmax = 1, ymin = 0.1, ymax = 1),
+                           fill = "red", alpha = 0.008)
+p_pvals<-p_pvals+geom_rect(aes(xmin = 0, xmax = 0.1, ymin = 0, ymax = 0.1),
+                           fill = "red", alpha = 0.008)
+p_pvals
+```
+
+
+```{r PrintSimValues}
+sprintf("Upper right quadrant: %i", simX1)
+sprintf("Upper left quadrant: %i", simX2)
+sprintf("Lower left quadrant: %i", simX3)
+sprintf("Lower right quadrant: %i", simX4)
+```
+## Plot of decontam vs PERFect Permutation method
+
+```{r PermPlot, echo=FALSE}
+p_perm <- ggplot(df_all) + geom_point(aes(x = decont, y = permCNP)) + ggtitle("Permutation PERFect p-values") + 
+  theme(panel.background = element_rect(fill = "white"), 
+        panel.grid.major = element_line(colour = "grey90"), 
+        axis.text.x = element_text(size = 10, colour = "black", 
+                                   angle = 90, hjust = 1))
+p_perm <- p_perm + geom_hline(yintercept = 0.1, color = "red", 
+                                linetype = "dashed")
+p_perm <- p_perm + ggtitle("") + geom_vline(xintercept = 0.1, 
+                                              color = "purple", linetype = "dashed")
+p_perm<-p_perm+geom_rect(aes(xmin = 0.1, xmax = 1, ymin = 0, ymax = 0.1),
+                           fill = "green", alpha = 0.005)
+p_perm<-p_perm+geom_rect(aes(xmin = 0, xmax = 0.1, ymin = 0.1, ymax = 1),
+                           fill = "green", alpha = 0.005)
+p_perm<-p_perm+geom_rect(aes(xmin = 0.1, xmax = 1, ymin = 0.1, ymax = 1),
+                           fill = "red", alpha = 0.008)
+p_perm<-p_perm+geom_rect(aes(xmin = 0, xmax = 0.1, ymin = 0, ymax = 0.1),
+                           fill = "red", alpha = 0.008)
+p_perm
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r PrintSimValues}
+sprintf("Upper right quadrant: %i", simX1)
+sprintf("Upper left quadrant: %i", simX2)
+sprintf("Lower left quadrant: %i", simX3)
+sprintf("Lower right quadrant: %i", simX4)
+```
+
+

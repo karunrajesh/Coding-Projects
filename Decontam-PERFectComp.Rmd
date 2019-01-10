@@ -1,0 +1,245 @@
+---
+title: "Decontam-PERFectComp"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r required_libraries}
+rm(list=ls())
+#packages for salter data
+library(decontam)
+library(phyloseq)
+library(reshape2)#;packageVersion("reshape2")
+
+library(Matrix)
+library(devtools)
+require(ggplot2)
+require(sn)
+require(fitdistrplus)
+require(psych) 
+library(PERFect)
+library(dirmult)
+library(HMP)
+library(knitr)
+library(gridExtra)
+library(grid)
+library(reshape2)
+library(zoo)
+set.seed(12341)
+#setwd("~/Dropbox/PERFect/RCode/")
+setwd("~/Documents/Katia Lab/PERFect-master/R")
+```
+In order to determine the differences between the Decontam methods and PERFect methods, I used the Salter_metagenomics R file to generate ampli.pool and ampli.min, which have the original ID’s as listed before along with the p-values. I then found all the contaminants found through the decontam methods and compared them to the p-values of the PERFect methods (res_sim_sn_a) by using their ID’s. I then found the total amount of differences by computing (the total amount of contaminants in PERFect – same ID’s in ampli.pool) + ID’s only in ampli.pool. 
+
+
+Read in the sample metadata
+
+```{r read_in_data}
+path.ampli <- "~/Documents/Katia Lab/DecontamManuscript-master/Analyses/Salter16S" # CHANGE ME
+df.ampli <- read.csv(file.path(path.ampli, "Salter1.csv"), header=TRUE, stringsAsFactors = FALSE)
+rownames(df.ampli) <- df.ampli$Run.accession
+```
+
+Read in the DADA2-processed ASV tables and taxonomnic assignments:
+
+```{r read_in_rds}
+st.ampli <- readRDS(file.path(path.ampli, "st.rds"))
+tax.ampli <- readRDS(file.path(path.ampli, "tax.rds"))
+ft.ampli <- sweep(st.ampli, 1, rowSums(st.ampli), "/")
+df.ampli$Dilution.number[df.ampli$Dilution.number == "0 (original culture)"] <- "0"
+df.ampli$Dilution.number[df.ampli$Dilution.number == "Negative control"] <- "Neg"
+conc.dict <- c("0"=1e3, "0 (original culture)"=1e3, "1"=1e2, "2"=1e1, "3"=1, "4"=1, "5"=1, "Neg"=1)
+df.ampli$conc <- conc.dict[df.ampli$Dilution.number]
+#identical(rownames(df.ampli), rownames(st.ampli)) # TRUE
+ps.ampli <- phyloseq(otu_table(st.ampli, taxa_are_rows=FALSE), tax_table(tax.ampli), sample_data(df.ampli))
+```
+
+## Analysis of 16S Amplicon Data
+```{r}
+#all non-Salmonealla reads in each sample are contaminants
+#these are the First 3  real SVs from the S. bongori strain
+true <- "Salmonella" == unname(tax.ampli)[,6]
+#make a vector of taxa cont and  id's
+type <-  rep("contam", dim(tax.ampli)[1])
+type[1:3] <- "true"
+
+taxaInfo <- data.frame(unname(tax.ampli))
+taxa <- rownames(taxaInfo)
+#change to numeric id  
+names(taxaInfo) <- c("kindgdom", "phylum", "class", "order",
+                     "family", "genus")
+taxaInfo <- cbind(taxa, type, taxaInfo)
+
+#arrange taxa in prevalence order NP
+#head is least dominant, tail is most dominant
+Salter.counts <- data.frame(otu_table(ps.ampli))
+names(Salter.counts) <- taxa
+NP <- NP_Order(Salter.counts)
+#taxaInfo <- taxaInfo[match(NP, taxaInfo$taxa),]
+#taxaInfo$taxa <- factor(taxaInfo$taxa, levels = NP)
+#all 3 true features are the most dominant in the data
+
+#dim(Salter.counts)
+Counts <- Salter.counts
+```
+
+
+
+```{r}
+#function to output results for each simulation run
+resSummary <-function(X, filtX, taxaInfo,  time = NA){
+  rank_pvals = NULL 
+  rank_pres = NULL
+  ntotal <- dim(X)[2]
+  npres <- dim(filtX)[2] #number of taxa left
+  pfilt <- (ntotal - npres)/ntotal #percentage of taxa filtered
+  ntrue <- sum(colnames(filtX) %in% c(1:3))#compare with true taxa
+  ncont <- length(taxaInfo$taxa) - 3
+  perccont <- (npres - ntrue)/ncont
+  #combine into results vector
+  res <- c(ntotal, npres, pfilt, ntrue, perccont)
+  names(res) <- c("ntotal", "npres", "pfilt", "ntrue", "perccont")
+  return(list(res = res,  time = time))
+}
+```
+
+
+1. Simultaneous PERFect with skew-normal distribution and taxa abundance ordering (NP ordering
+```{r create_simNP}
+
+#########################
+#quantiles from fit a
+##########################
+start <- Sys.time()
+res_sim_sn_a <- PERFect_sim(X=Counts,  Order="NP",  nbins = 30, col = "red", 
+                            fill = "green", alpha = 0.1, distr = "sn", 
+                            quant = c(0.05,0.10, 0.25), hist_fill =0.2, linecol = "blue",
+                            lag = 3, direction ="left")
+end <-  Sys.time()-start
+summary_sim_sn_a <- resSummary(X = Counts, filtX = res_sim_sn_a$filtX, 
+                               taxaInfo = taxaInfo,  time = end)
+```
+2. Simultaneous PERFect with skew-normal distribution and p-values ordering
+```{r create_simPvals}
+
+#########################
+#quantiles from fit a
+##########################
+start <- Sys.time()
+res_sim_sn_a_pvals <- PERFect_sim(X=Counts,  Order="pvals",  nbins = 30, col = "red", 
+                                  fill = "green", alpha = 0.1, distr = "sn", pvals_sim = res_sim_sn_a,
+                                  quant = c(0.05,0.10, 0.25), hist_fill =0.2, linecol = "blue",
+                                  lag = 3, direction ="left")
+end <-  Sys.time()-start
+```
+
+
+3. Permutation PERFect with skew-normal distribution and NP ordering
+```{r create_permNP}
+#########################
+#quantiles from fit a
+##########################
+start <- Sys.time()
+res_perm_a <- PERFect_perm(X=Counts,  Order="NP",  nbins = 30, col = "red", k = 1000,
+                           fill = "green", alpha = 0.1, distr = "sn", 
+                           quant = c(0.05,0.10, 0.25), hist_fill =0.2, linecol = "blue",
+                           lag = 3, direction ="left")
+(end <-  Sys.time()-start)
+```
+
+4. Permutation PERFect with skew-normal distribution and simultaneous PERFect p-values ordering
+```{r create_permPvals}
+#########################
+#quantiles from fit a
+##########################
+start <- Sys.time()
+res_perm_pvals_a <- PERFect_perm_reorder(X=Counts,  Order = "pvals",  
+                                         pvals_sim = res_sim_sn_a,
+                                         res_perm = res_perm_a, alpha = 0.1, distr = "sn",
+                                         lag = 3, direction ="left")
+end <-  Sys.time()-start
+```
+
+
+5. Filtering method from the *decontam* R-package
+```{r create_decontam_data}
+#Filtering method from the *decontam* R-package
+start <- Sys.time()
+ampli.min <- isContaminant(ps.ampli, method="frequency", conc="conc", batch="Processing.Institute", batch.combine="minimum", normalize=TRUE)
+end <-  Sys.time()-start
+ampli.pool <- isContaminant(ps.ampli, method="frequency", conc="conc", normalize=TRUE)
+```
+
+
+6. Create vector of contaminants through both decontam methods
+```{r create_decontam_contaminants}
+decPool = which(ampli.pool$p<=0.1)
+decMin = which(ampli.min$p<=0.1)
+```
+
+## Comparing decontam and PERFect
+Obtain p-values of contaminants identified through only PERFect methods and not by decontam pooled method. 
+1. Simultaneous PERFect with skew-normal distribution and taxa abundance ordering (NP ordering) 
+```{r simNP}
+#quantiles from fit a
+perfSimA = as.numeric(names(which(res_sim_sn_a$pvals>0.1)))
+#taxaName = as.data.frame(tax.ampli)
+# poolContGenus= unname(tax.ampli)[,6][decPool]
+# poolContGenus = poolContGenus[!is.na(poolContGenus)]
+# minContGenus = unname(tax.ampli)[,6][decMin]
+# #perfContInd = taxaInfo$taxa[perfSimA]
+# perfContGenus = unname(tax.ampli)[,6][perfSimA]
+# which(perfContGenus%in%poolContGenus==TRUE)
+# perfContGenus[which(perfContGenus%in%poolContGenus==TRUE)]
+# poolContGenus%in%perfContGenus
+#decPool[decPool%in%perfSimA]
+#decMin[decMin%in%perfSimA]
+commonGenusPoolSimA= unname(tax.ampli)[,6][decPool[decPool%in%perfSimA]]
+simIndA = perfSimA[!(perfSimA%in%decPool)]
+simOnlyNP=res_sim_sn_a$pvals[as.character(simIndA)]
+
+```
+
+
+2. Simultaneous PERFect with skew-normal distribution and p-values ordering
+```{r simPvals}
+perfSimPvals = as.numeric(names(which(res_sim_sn_a_pvals$pvals>0.1)))
+commonGenusPoolSimPvals= unname(tax.ampli)[,6][decPool[decPool%in%perfSimPvals]]
+simIndPvals = perfSimPvals[!(perfSimPvals%in%decPool)]
+simOnlyPval=res_sim_sn_a_pvals$pvals[as.character(simIndPvals)]
+
+```
+
+
+3. Permutation PERFect with skew-normal distribution and NP ordering
+```{r permNP}
+perfPermNP = as.numeric(names(which(res_perm_a$pvals>0.1)))
+commonGenusPoolPermNP= unname(tax.ampli)[,6][decPool[decPool%in%perfPermNP]]
+permIndNP = perfPermNP[!(perfPermNP%in%decPool)]
+permOnlyNP=res_perm_a$pvals[as.character(permIndNP)]
+
+```
+
+
+4. Permutation PERFect with skew-normal distribution and simultaneous PERFect p-values ordering
+```{r permPvals}
+perfPermPvals = as.numeric(names(which(res_perm_pvals_a$pvals>0.1)))
+commonGenusPoolPermPvals= unname(tax.ampli)[,6][decPool[decPool%in%perfPermPvals]]
+perfIndPvals = perfPermPvals[!(perfPermPvals%in%decPool)]
+permOnlyPval=res_perm_pvals_a$pvals[as.character(perfIndPvals)]
+
+```
+
+
+## Histogram Plots
+
+
+```{r pressure, echo=FALSE}
+hist(simOnlyNP,main = "PERFect Simulataneous (NP) Contaminants",xlab="P-value",labels=TRUE,ylim=c(0,60),breaks=20)
+hist(simOnlyPval,main = "PERFect Simulataneous (P-value) Contaminants",xlab="P-value",labels=TRUE,ylim=c(0,60), breaks=20)
+hist(permOnlyNP,main = "PERFect Permutation (NP) Contaminants",xlab="P-value",labels=TRUE,ylim=c(0,60), breaks=20)
+hist(permOnlyPval,main = "PERFect Permutation (P-value) Contaminants",xlab="P-value",labels=TRUE,ylim=c(0,60), breaks=20)
+```

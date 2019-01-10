@@ -1,0 +1,421 @@
+---
+title: "DiluComparison"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r cars, include=FALSE}
+rm(list=ls())
+#packages for salter data
+library(decontam)
+library(phyloseq)
+library(reshape2)#;packageVersion("reshape2")
+library(DT)
+library(Matrix)
+library(devtools)
+require(ggplot2)
+require(sn)
+require(fitdistrplus)
+require(psych) 
+library(PERFect)
+library(dirmult)
+library(HMP)
+library(knitr)
+library(gridExtra)
+library(grid)
+library(reshape2)
+library(zoo)
+
+
+set.seed(12341)
+
+#setwd("~/Dropbox/PERFect/RCode/")
+#setwd("~/Documents/Katia Lab/PERFect-master/R")
+setwd("~/Dropbox/MicrobiomeFiltering/Code/")
+#setwd("~/Dropbox/PERFect/MicrobiomeFiltering/Code/")
+path.ampli <- "~/Documents/Katia Lab/DecontamManuscript-master/Analyses/Salter16S" # CHANGE ME
+#path.ampli <- "~/Dropbox/PERFect/Rcode/DecontamManuscript-master/Analyses/Salter16S" # CHANGE ME
+```
+
+##Microbiome filtering problem
+
+Several approaches currently used:
+
+1. Remove rare taxa, e.g., taxa present in less than $5\%$ of samples -- ad hoc rules
+
+2. Identify contaminant taxa using statistical methods -- decontam package
+https://www.biorxiv.org/content/early/2017/11/17/221499
+
+3. Tested on 4 data sets  with data and analysis vignettes available with the package
+
+
+a. Replication and refinement of a vaginal microbial signature of preterm birth in two racially distinct cohorts of US women, Callahan et al., 2017, https://doi.org/10.1073/pnas.1705899114
+
+b. Comparison of placenta samples with contamination controls does not provide evidence for a distinct placenta microbiota, Lauder et al., 2016, https://doi.org/10.1186/s40168-016-0172-3
+
+c. Reagent and laboratory contamination can critically impact sequence-based microbiome analyses, Salter et al., 2014, https://doi.org/10.1186/s12915-014-0087-z
+
+d. Oral microbiome data set (reference paper not found but data available through decontam package)
+
+
+4.  Remove rare taxa using statistical threshold rule -- PERFect package
+https://academic.oup.com/biostatistics/advance-article/doi/10.1093/biostatistics/kxy020/5039878
+
+5.  Tested on 5 data sets
+
+
+a.  VCU positive controls data 6 true species 
+b.  VCU sequencing bias study 7 true species https://www.ncbi.nlm.nih.gov/pubmed/25880246
+c.  Salter data, same as decontam 
+d.  Ravel vaginal microbiome study data https://www.ncbi.nlm.nih.gov/pubmed/20534435
+e.  NICU contamination data https://www.nature.com/articles/nmeth.1650
+
+
+Filtering advantages:
+
+
+1.  Dimension reduction. Microbiome data is very sparse, often >50% of taxa (variables) are reduced by filtering
+
+2.  FDR control: less variables means less bacteria 
+
+3.  Screening procedure for PCA and sparse variable selection methods using penalty to reduce number of variables that are significant for predicting an outcome
+
+4.  Avoid controvertial claims about rare bacteria discovery
+
+5.  Remove technical variation (e.g., when same samples are processed in different labs)
+
+6.  Useful for low biomass samples since DNA contamination disproportionately affects samples from low-biomass environments
+
+
+Problems if initial screening and/or contaminant removal is not performed:
+
+
+1. Contamination falsely inflates within-sample (alpha) diversity (see references in decontam paper)
+
+2.  Obscures differences between (beta) samples. Often measured by sample-wise distances using Bray-Curtis or Unifrac distance metric. 
+
+
+
+#Completed and work in progress (with Nitai)
+
+
+1. package PERFect on github page https://github.com/katiasmirn/PERFect
+
+2. Quy Cao: improved package code, documentation, help files, vignettes and analysis files. Prepares:
+
+a. user friendly vignette to walk through analysis
+
+b. speed up permutation algorithm
+
+c. release for CRAN or Bioconductor
+
+d. package  Journal of Statistical Software paper
+
+3. Karun Rajesh: works on comparison of decontam and PERFect results 
+
+4. Xinxin Sun and Martin Lavallee: look at effects of downstream analysis, starting with MDS and will extend to other analyses mentined above in filtering advantages section
+
+ 
+
+##Reagent and laboratory contamination data
+
+The data (Salter et al, 2014) was generated to study  the effect of DNA extraction kits and other laboratory reagents  on contaminantion in microbiome sequencing data. Mock samples of a pure Salmonella bongori culture had undergone five rounds of serial ten-fold dilutions to generate a series of high to low biomass samples. To generate a taxa counts table from this study, we used samples for the Salmonella bongori culture 16S rRNA gene profiling data, which are deposited as FASTQ files under ENA project accession EMBL: ERP006737 https://www.ebi.ac.uk/ena/data/view/PRJEB7055, and processed using the *dada2* R-package. 
+
+## Goals of this Project
+
+The main goal of this project is to analyze the differences between PERFect and decontam methods for determining signal and noise taxa. In order to do this, the Salter et al, 2014 data was analyzed by both methods. To learn more about the biomass dilution effect on PERFect method results, the Salter data was also split into  low, normal, and high dilution types. 
+
+## Process 16S Amplicon Data
+
+The downloaded amplicon sequencing data was processed using the *dada2* R-package, producing a table of exact amplicon sequence variants (ASV). Those processed files are included as part of this reproducible analysis in the `Salter16S` directory. 
+
+```{r read_in_data}
+df.ampli <- read.csv(file.path(path.ampli, "Salter1.csv"), header=TRUE, stringsAsFactors = FALSE)
+rownames(df.ampli) <- df.ampli$Run.accession
+```
+
+
+
+```{r read_in_rds}
+st.ampli <- readRDS(file.path(path.ampli, "st.rds"))
+tax.ampli <- readRDS(file.path(path.ampli, "tax.rds"))
+ft.ampli <- sweep(st.ampli, 1, rowSums(st.ampli), "/")
+df.ampli$Dilution.number[df.ampli$Dilution.number == "0 (original culture)"] <- "0"
+df.ampli$Dilution.number[df.ampli$Dilution.number == "Negative control"] <- "Neg"
+conc.dict <- c("0"=1e3, "0 (original culture)"=1e3, "1"=1e2, "2"=1e1, "3"=1, "4"=1, "5"=1, "Neg"=1)
+df.ampli$conc <- conc.dict[df.ampli$Dilution.number]
+
+df_Upper.ampli = subset(df.ampli,Dilution.number>=3)
+Upper = match(row.names(df_Upper.ampli),row.names(st.ampli))
+st_Upper.ampli = st.ampli[Upper,]
+
+df_Lower.ampli = subset(df.ampli,Dilution.number<3)
+Lower = match(row.names(df_Lower.ampli),row.names(st.ampli))
+st_Lower.ampli = st.ampli[Lower,]
+
+#identical(rownames(df.ampli), rownames(st.ampli)) # TRUE
+ps.ampli <- phyloseq(otu_table(st.ampli, taxa_are_rows=FALSE), tax_table(tax.ampli), sample_data(df.ampli))
+psUpper.ampli <- phyloseq(otu_table(st_Upper.ampli, taxa_are_rows=FALSE), tax_table(tax.ampli), sample_data(df_Upper.ampli))
+psLower.ampli <- phyloseq(otu_table(st_Lower.ampli, taxa_are_rows=FALSE), tax_table(tax.ampli), sample_data(df_Lower.ampli))
+```
+
+
+```{r}
+#all non-Salmonealla reads in each sample are contaminants
+#these are the First 3  real SVs from the S. bongori strain
+true <- "Salmonella" == unname(tax.ampli)[,6]
+#make a vector of taxa cont and  id's
+type <-  rep("contam", dim(tax.ampli)[1])
+type[1:3] <- "true"
+
+taxaInfo <- data.frame(unname(tax.ampli))
+taxa <- rownames(taxaInfo)
+#change to numeric id  
+names(taxaInfo) <- c("kindgdom", "phylum", "class", "order",
+                     "family", "genus")
+taxaInfo <- cbind(taxa, type, taxaInfo)
+
+#arrange taxa in prevalence order NP
+#head is least dominant, tail is most dominant
+Salter.counts <- data.frame(otu_table(ps.ampli))
+names(Salter.counts) <- taxa
+NP <- NP_Order(Salter.counts)
+#taxaInfo <- taxaInfo[match(NP, taxaInfo$taxa),]
+#taxaInfo$taxa <- factor(taxaInfo$taxa, levels = NP)
+#all 3 true features are the most dominant in the data
+Counts <- Salter.counts
+a = subset(df.ampli,Dilution.number>=3)
+newUpper = match(row.names(a),row.names(Salter.counts))
+SalterUpper = Salter.counts[newUpper,]
+#dim(Salter.counts)
+CountsUpper <- SalterUpper
+b = subset(df.ampli,Dilution.number<3)
+newLower = match(row.names(b),row.names(Salter.counts))
+SalterLower = Salter.counts[newLower,]
+#dim(Salter.counts)
+CountsLower <- SalterLower
+
+```
+
+```{r}
+#function to output results for each simulation run
+resSummary <-function(X, filtX, taxaInfo,  time = NA){
+  rank_pvals = NULL 
+  rank_pres = NULL
+  ntotal <- dim(X)[2]
+  npres <- dim(filtX)[2] #number of taxa left
+  pfilt <- (ntotal - npres)/ntotal #percentage of taxa filtered
+  ntrue <- sum(colnames(filtX) %in% c(1:3))#compare with true taxa
+  ncont <- length(taxaInfo$taxa) - 3
+  perccont <- (npres - ntrue)/ncont
+  #combine into results vector
+  res <- c(ntotal, npres, pfilt, ntrue, perccont)
+  names(res) <- c("ntotal", "npres", "pfilt", "ntrue", "perccont")
+  return(list(res = res,  time = time))
+}
+```
+#### Studying how the method deals with variable biomass levels
+
+1. We want to compare how PERFect results compare  in low and high biomass versus combined data set
+
+2. In actual studies low biomass environments commonly occur and there is higher chance to "confuse" signal with noise
+
+3. Compare to decontam  to see if both methods in general identify similar taxa as noise
+
+4. In high biomass environment we expect better classification of signal taxa 
+
+5. We expect to maintain results (still see 3 signal taxa) in low biomass environment 
+
+6. Expect to keep more noise taxa in low biomass samples but not significantly larger than in combined or high biomass data sets
+
+There are a total of 7 dilutions, where 0 corresponds to the original culture (high biomass) and negative to water (no biomass).  We split the data set (samples) into  3 categories and compare filtering results for each category:
+
+* 1. High dilution (low biomass),  defined as  dilution number of 3 or greater
+    + 3, 4, 5, Neg
+* 2. Low dilution (high biomass), defined as  dilution number of 2 or less
+    + 0, 1, 2
+    + Lower dilution means a stronger signal for the taxa (more counts overall)
+* 3. Combined,  data for  all 7 dilution levels 
+
+* ID ranking corresponds to taxa abundance (i.e., larger counts)
+    + Lower IDs correspond to higher rank, i.e.  abundant taxa
+    + Higher ranked taxa are more likely to be classified  as signal taxa
+    + Rank is determined by the number of samples a taxon appears in and by the value of counts  in these samples
+
+## PERFect Analysis with Different Dilutions
+
+##### Combined Dilutions
+1. Simultaneous PERFect with skew-normal distribution and taxa abundance ordering (NP ordering
+```{r create_simNP}
+
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_sim_sn_a <- PERFect_sim(X=Counts)
+end <-  Sys.time()-start
+
+```
+
+3. Permutation PERFect with skew-normal distribution and NP ordering
+```{r create_permNP, eval=FALSE, include=FALSE}
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_perm_a <- PERFect_perm(X=Counts)
+(end <-  Sys.time()-start)
+```
+
+##### High Dilutions
+1. Simultaneous PERFect with skew-normal distribution and taxa abundance ordering (NP ordering
+```{r create_simNPUpper}
+
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_sim_sn_aUpper <- PERFect_sim(X=CountsUpper)
+end <-  Sys.time()-start
+
+```
+
+3. Permutation PERFect with skew-normal distribution and NP ordering
+```{r create_permNPUpper, eval=FALSE, include=FALSE}
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_perm_aUpper <- PERFect_perm(X=CountsUpper)
+(end <-  Sys.time()-start)
+```
+
+##### Low Dilutions
+1. Simultaneous PERFect with skew-normal distribution and taxa abundance ordering (NP ordering
+```{r create_simNPLower}
+
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_sim_sn_aLower <- PERFect_sim(X=CountsLower)
+end <-  Sys.time()-start
+
+```
+
+3. Permutation PERFect with skew-normal distribution and NP ordering
+```{r create_permNPLower, eval=FALSE, include=FALSE}
+#########################
+#quantiles from fit c
+##########################
+start <- Sys.time()
+res_perm_aLower <- PERFect_perm(X=CountsLower)
+(end <-  Sys.time()-start)
+```
+
+##### Decontam Methods
+5. Filtering method from the *decontam* R-package
+```{r create_decontam_data}
+#Filtering method from the *decontam* R-package
+start <- Sys.time()
+ampli.min <- isContaminant(ps.ampli, method="frequency", conc="conc", batch="Processing.Institute", batch.combine="minimum", normalize=TRUE)
+end <-  Sys.time()-start
+ampli.pool <- isContaminant(ps.ampli, method="frequency", conc="conc", normalize=TRUE)
+
+start <- Sys.time()
+ampliUpper.min <- isContaminant(psUpper.ampli, method="frequency", conc="conc", batch="Processing.Institute", batch.combine="minimum", normalize=TRUE)
+end <-  Sys.time()-start
+ampliUpper.pool <- isContaminant(psUpper.ampli, method="frequency", conc="conc", normalize=TRUE)
+
+start <- Sys.time()
+ampliLower.min <- isContaminant(psLower.ampli, method="frequency", conc="conc", batch="Processing.Institute", batch.combine="minimum", normalize=TRUE)
+end <-  Sys.time()-start
+ampliLower.pool <- isContaminant(psLower.ampli, method="frequency", conc="conc", normalize=TRUE)
+```
+
+6. Create vector of contaminants through both decontam methods
+```{r create_decontam_contaminants}
+decPool = which(ampli.pool$p<=0.1)
+decMin = which(ampli.min$p<=0.1)
+ID = decPool
+Genus = unname(tax.ampli)[,6][decPool]
+decontamCombined = round(ampli.pool$p[decPool],5)
+
+decPoolUpper = which(ampliUpper.pool$p<=0.1)
+decMinUpper = which(ampliUpper.min$p<=0.1)
+IDUpper = decPoolUpper
+GenusUpper = unname(tax.ampli)[,6][decPoolUpper]
+decontamUpper = round(ampliUpper.pool$p[decPoolUpper],5)
+
+decPoolLower = which(ampliLower.pool$p<=0.1)
+decMinLower = which(ampliLower.min$p<=0.1)
+IDLower = decPoolLower
+GenusLower = unname(tax.ampli)[,6][decPoolLower]
+decontamLower = round(ampliLower.pool$p[decPoolLower],5)
+```
+
+## Comparison of the three dilutions
+
+44 Taxa listed in table below correspond to the contaminants identified by decontam method. For each taxon, we compare the p-values reported by decontam for combined data and simultaneous PERFect for each dilution method.    
+
+#####For decontam method: p-value < 0.1 indicates a contaminant
+
+#####For PERFect method: p-value > 0.1 indicates noise
+
+* Out of 44 contaminant taxa, there are 7  taxa classified as signal in low dilution data set, 20 taxa in combined, and 20 taxa in high dilution.
+    + Results make sense, as in high biomass samples it is easier to distinguish signal or noise taxa as compared to low biomass samples
+    + Difference between the low and combined dilution signal taxa (13) as compared to the combined and high dilution signal taxa (0)
+    + All dilutions classify original sample as signal taxa (ID's: 1,2,3 are classified as signal taxa)
+* Overall Counts of Signal Taxa (Includes actual signal taxa):
+    + decontam Combined Dilutions: 591/635
+    + decontam Low Dilutions: 617/635
+    + PERFect Combined Dilutions: 31/635
+    + PERFect High Dilutions: 35/635
+    + PERFect Low Dilutions: 13/635
+
+```{r TableCreationSim}
+
+PERFectCombined = round(res_sim_sn_a$pvals[as.character(decPool)],5)
+PERFectHigh = round(res_sim_sn_aUpper$pvals[as.character(decPool)],5)
+PERFectLow = round(res_sim_sn_aLower$pvals[as.character(decPool)],5)
+dfSim = data.frame(ID,decontamCombined,PERFectCombined,PERFectHigh,PERFectLow)
+datatable(dfSim, rownames = FALSE)
+
+simOnePvalsB = round(res_sim_sn_a$pvals[as.character(decPoolUpper)],5)
+simOneUpperB = round(res_sim_sn_aUpper$pvals[as.character(decPoolUpper)],5)
+simOneLowerB = round(res_sim_sn_aLower$pvals[as.character(decPoolUpper)],5)
+dfSimB= data.frame(IDUpper,decontamUpper,simOnePvalsB,simOneUpperB,simOneLowerB)
+datatable(dfSimB, rownames = FALSE)
+
+PERFectCombined = round(res_sim_sn_a$pvals[as.character(decPoolLower)],5)
+PERFectHigh = round(res_sim_sn_aUpper$pvals[as.character(decPoolLower)],5)
+PERFectLow= round(res_sim_sn_aLower$pvals[as.character(decPoolLower)],5)
+dfSimC = data.frame(IDLower,decontamLower,PERFectCombined,PERFectHigh,PERFectLow)
+datatable(dfSimC, rownames = FALSE)
+
+
+PERFectCombined_ID = length(which(res_sim_sn_a$pvals<0.1))
+PERFectHigh_ID = length(which(res_sim_sn_aUpper$pvals<0.1))
+PERFectLower_ID = length(which(res_sim_sn_aLower$pvals<0.1))
+decontam_ID = 635-length(decPool)
+decontamLower_ID = 635 - length(decPoolLower)
+
+dfDilut = data.frame(decontam_ID,decontamLower_ID,PERFectCombined_ID,PERFectHigh_ID,PERFectLower_ID)
+datatable(dfDilut, rownames = FALSE)
+```
+
+
+```{r TableCreationPerm, eval=FALSE, include=FALSE}
+
+permOnePvals = round(res_perm_a$pvals[as.character(decPool)],5)
+permOneUpper = round(res_perm_aUpper$pvals[as.character(decPool)],5)
+permOneLower = round(res_perm_aLower$pvals[as.character(decPool)],5)
+dfPerm = data.frame(ID,decontamPvals,permOnePvals,permOneUpper,permOneLower)
+datatable(dfPerm, rownames = FALSE)
+
+```

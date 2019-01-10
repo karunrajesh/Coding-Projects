@@ -1,0 +1,142 @@
+---
+title: "Quy Physeq"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r lib, include=FALSE}
+set.seed(12341)
+rm(list=ls())
+
+#packages for salter data
+library(data.table)
+library(decontam)
+library(phyloseq)
+library(reshape2)#;packageVersion("reshape2")
+library(xtable)
+library(knitr)
+library(kableExtra)
+library(DT)
+library(Matrix)
+library(devtools)
+require(ggplot2)
+require(sn)
+require(fitdistrplus)
+require(psych) 
+library("ggplot2"); packageVersion("ggplot2")
+library(PERFect)
+library(dirmult)
+library(HMP)
+library(knitr)
+library(gridExtra)
+library(grid)
+library(reshape2)
+library(zoo)
+
+setwd("~/Dropbox/MicrobiomeFiltering/Code/")
+#setwd("~/Documents/Katia Lab/MockCommunity/Data")
+
+path.ampli <- "~/Documents/Katia Lab/MockCommunity/Data"
+#path.ampli <- "~/Dropbox/MBWG/MockCommunity/Data/"
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+
+#df.ampli <- read.tsv(file.path(path.ampli, "mbqc_integrated_otus.tsv"), header=TRUE, stringsAsFactors = FALSE)
+options(xtable.floating = FALSE)
+options(xtable.timestamp = "")
+# Read in OTU table
+tf.ampli <- read.table(file =  file.path(path.ampli, 'mbqc_integrated_otus.tsv'), sep = '\t', header = TRUE)
+a = dim(tf.ampli)[1]
+oral <- which(tf.ampli[56,] == 'Oral artificial colony' | tf.ampli[56,] == 'specimen_type_collapsed')
+oral.ampli <- tf.ampli[72:a, oral]
+# Get the names of all samples
+name.ampli <- oral.ampli[0,]
+# Get the metadata of the samples, make first row the column names
+stat.ampli <- t(tf.ampli[0:71,oral])
+colnames(stat.ampli) = stat.ampli[1,]
+stat.ampli = stat.ampli[-1,]
+# Get the length of the full OTU table
+a = dim(tf.ampli)[1]
+# Number of taxa in OTU table
+check = (a-72)+1
+# Get all taxa in sample
+taxa.ampli <- oral.ampli[72:a,]
+#Dataframe with taxa and sample names
+new.ampli <- rbind(name.ampli,taxa.ampli)
+rownames(new.ampli) <- make.names(new.ampli$sample,unique=TRUE)
+new.ampli$sample <- NULL
+#stat.ampli$sample <- NULL
+otumat <- data.matrix(new.ampli)
+```
+
+
+
+
+```{r PhySeq, echo = FALSE}
+## Creation of classification table for taxa
+oh <- array(1:check)
+king <- array(1:check)
+phyl <- array(1:check)
+cls <- array(1:check)
+ord <- array(1:check)
+fam <- array(1:check)
+gen <- array(1:check)
+for (i in 1:check){ 
+  oh[i] <- toString(taxa.ampli$sample[i])
+  b <- unlist(strsplit(oh[i],"__"))
+  king[i] <- substr(b[2],1,nchar(b[2])-2)
+  phyl[i] <- substr(b[3],1,nchar(b[3])-2)
+  cls[i] <- substr(b[4],1,nchar(b[4])-2)
+  ord[i] <- substr(b[5],1,nchar(b[5])-2)
+  fam[i] <- substr(b[6],1,nchar(b[6])-2)
+  gen[i] <- substr(b[7],1,nchar(b[7])-2)
+}
+#Table of taxa with classification
+taxmat = matrix(c(king,phyl,cls,ord,fam,gen), nrow = check, ncol = 6)
+rownames(taxmat) <- rownames(new.ampli)
+colnames(taxmat) <- c("Domain", "Phylum", "Class", "Order", "Family", "Genus")
+#OTU Table
+OTU = otu_table(otumat, taxa_are_rows = TRUE)
+#TAXA Table
+TAX = tax_table(taxmat)
+#Sample Metadata
+SAMPLE = sample_data(data.frame(stat.ampli))
+#Phyloseq Object
+physeq = phyloseq(OTU, TAX, SAMPLE)
+saveRDS(physeq,"Oral_Physeq.rds")
+#plot_heatmap(physeq)
+#ids <- sample(sample_data(physeq)$subjec)
+#plot_bar(physeq, fill = "Family")
+
+#richness_measures <- c('Observed', 'Shannon', 'Simpson')
+#alpha_div <- estimate_richness((physeq))
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+GP <- prune_species(speciesSums(physeq) > 0, physeq)
+richness_measures <-c("Shannon", "Simpson")
+
+plot_richness(GP, x="blinded_lab", measures=richness_measures)
+
+plot_richness(GP, x="dry_lab", measures=richness_measures)
+
+richness_measures <-c("Observed", "Shannon", "Simpson")
+alpha_div <- estimate_richness(GP, measures=richness_measures)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
